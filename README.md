@@ -1,205 +1,237 @@
 # hybrid-medication-extraction
 
-This repository provides an end-to-end pipeline for extracting medication-related actions from unstructured clinical notes. The system processes free-text medical documentation to identify medication mentions and determine whether the clinician is starting, stopping, or continuing a drug therapy. The approach integrates rule-based extraction, a biomedical NER model, a curated drug dictionary, and an optional language model for resolving ambiguous cases.
+This repository contains a complete pipeline for extracting medication actions from unstructured clinical notes. The system identifies medication mentions and determines whether a clinician is starting, stopping, continuing, holding, or resuming a therapy. It uses a hybrid approach combining rule-based extraction, a biomedical NER model, a curated drug dictionary, and an optional LLM step for resolving ambiguous cases.
 
-The pipeline is designed for large-scale processing tasks and supports batched execution, chunking, and parallel LLM calls. All modules include logging for traceability.
+The pipeline supports large datasets through chunked processing and parallel LLM execution. All components include logging to support debugging and auditability.
 
-Core Features
+---
 
-Rule-based action extraction using an extended clinical grammar.
+## Overview
 
-Transformer-based biomedical NER for medication recognition.
+The project implements the following workflow:
 
-Dictionary-based detection to catch medications not identified by the model.
+1. **Rule-based action extraction**
+   Identifies clinical action phrases such as “start”, “stop”, “continue”, “hold”, “discontinue”, and many variations and shorthands.
 
-Medication–action alignment using character proximity.
+2. **Biomedical NER extraction**
+   Uses the `d4data/biomedical-ner-all` model to detect medication mentions in text. Runs in batch mode for efficiency.
 
-Confidence scoring with penalties for disagreements between subsystems.
+3. **Dictionary-based identification**
+   A drug list (`drug_set.txt`) is loaded and normalized. Matching is performed on cleaned note text to catch medications that the NER model may miss.
 
-Optional LLM refinement for uncertain predictions via Ollama.
+4. **Alignment of actions and medications**
+   Each action is paired with the closest medication mention based on character indexes.
 
-Batch and chunk processing for efficient scaling.
+5. **Confidence scoring**
+   Uses the NER confidence score and penalizes disagreements between rule-based and NER detections.
 
-Parallel LLM execution to accelerate slow components.
+6. **Optional LLM step**
+   Low-confidence outputs are refined through an LLM running locally via Ollama.
+   Only this subset of results is reviewed to minimize runtime cost.
 
-Command-line configuration with fallback to default parameters.
+7. **Chunked execution**
+   Notes are processed in chunks (default 100 per chunk).
+   NER runs in batch mode, and LLM calls run concurrently.
 
-Architecture Overview
+---
 
-The system follows a sequential multi-stage architecture.
+---
 
-Rule-based Extraction
-
-The pipeline includes curated patterns to detect instructions such as "start", "stop", "resume", "hold", or "continue", including common clinical shorthand terms such as “d/c”, “dc”, “taper off”, “increase to”, and others.
-
-Biomedical NER
-
-A pretrained model (d4data/biomedical-ner-all) performs entity recognition in batch mode. Only drug-related labels are retained for further processing.
-
-Drug Dictionary
-
-A text file containing drug names is loaded at startup. Each name is normalized to improve pattern matching. The dictionary is used to identify medications that may not appear as NER entities.
-
-Candidate Construction
-
-Outputs from the three components (rule-based, NER, dictionary) are merged. Each action is associated with the closest medication span in the text.
-
-Confidence Assignment
-
-The system assigns a confidence score based on NER model output and cross-source agreement.
-
-LLM Review (Optional)
-
-Low-confidence entries may be submitted to an LLM running locally through Ollama. The model is instructed to evaluate the clinical note comprehensively, reconstruct missing medications, and resolve ambiguous actions. Returned JSON is validated before saving.
-
-Chunk Processing and Concurrency
-
-To support large datasets, the pipeline processes notes in chunks. NER runs in batches, and LLM queries are parallelized by worker threads.
-
-Installation
+## Installation
 
 Clone the repository:
 
-git clone https://github.com/<your-repo>/medication-reconciliation.git
-cd medication-reconciliation
-
+```
+git clone https://github.com/div1996/hybrid-medication-extraction.git
+cd hybrid-medication-extraction
+```
 
 Create a virtual environment:
 
+```
 python -m venv venv
-
+```
 
 Activate the environment:
 
 Windows:
 
+```
 venv\Scripts\activate
-
+```
 
 macOS/Linux:
 
+```
 source venv/bin/activate
-
+```
 
 Install requirements:
 
+```
 pip install -r requirements.txt
+```
 
-Installing Ollama (Optional for LLM Review)
+---
 
-Install Ollama from:
+## Installing Ollama (Required Only If LLM Features Are Enabled)
 
-https://ollama.com/download
+Download Ollama:
 
-Once installed, pull a model suitable for clinical reasoning:
+[https://ollama.com/download](https://ollama.com/download)
 
-ollama pull llama3
+After installation, start the Ollama server:
 
-
-Start the Ollama server:
-
+```
 ollama serve
+```
 
+Download an appropriate model:
 
-If you do not enable LLM mode, the pipeline will run without Ollama.
+```
+ollama pull llama3
+```
 
-Preparing the Drug Dictionary
+The pipeline will automatically use this model when `--use_llm true` is enabled.
 
-Place a text file named drug_set.txt in the data/ directory.
-Each line should contain a drug name in lowercase:
+---
 
+## Input Files
+
+### Notes CSV
+
+Expected to contain a column named `note_text`.
+
+Example:
+
+```
+note_text
+"Patient continues timolol... Start latanoprost..."
+"Stop brimonidine due to allergy..."
+```
+
+### Drug Dictionary
+
+A text file (`drug_set.txt`) with one drug name per line, cleaned and lowercase.
+
+Example:
+
+```
 latanoprost
 timolol
 brimonidine
 aspirin
 hydrocodone
+```
 
+Place it in the `data/` folder or specify a different path via CLI arguments.
 
-Ensure the file does not contain commas or additional formatting.
+---
 
-Running the Pipeline
+## Running the Pipeline
 
-The script accepts command-line arguments.
+Basic usage with defaults:
 
-Basic execution:
-
+```
 python medication_extraction.py
+```
 
+This uses:
 
-This uses default values:
+* `Sample_data_to_test.csv`
+* `drug_set.txt`
+* writes results to `output_notes_df.csv`
+* uses chunk size of 100
+* LLM enabled
 
-Input CSV: Sample_data_to_test.csv
+---
 
-Drug list: drug_set.txt
+## Output
 
-Output file: output_notes_df.csv
+The script produces a CSV with the following columns:
 
-Chunk size: 100
+* `note_id`
+* `action`
+* `keyword`
+* `rule_based_med`
+* `ner_med`
+* `ner_label`
+* `confidence`
+* `llm_output` (JSON)
 
-LLM workers: 1
+Example LLM output inside the cell:
 
-LLM enabled: True
+```
+{"final_medication": "latanoprost",
+ "final_action": "Continue",
+ "additional_medications": ["timolol"],
+ "rationale": "The note clearly states the patient is continuing latanoprost."}
+```
 
-Optional Arguments
-python medication_extraction.py \
-  --notes path/to/notes.csv \
-  --drugs path/to/drug_set.txt \
-  --output results.csv \
-  --use_llm true \
-  --chunk_size 200 \
-  --llm_workers 2
+---
 
+## Logging
 
-Arguments not provided fallback to defaults defined in the script.
+Logs are written to:
 
-Logging
-
-The script writes all logs to:
-
+```
 logs/med_recon_chunk_parallel.log
+```
 
+This file includes:
 
-This includes:
+* Loading of resources
+* Chunk processing progress
+* Number of detected actions
+* LLM call counts
+* Errors and fallbacks
 
-Chunk progress updates
+---
 
-NER initialization
+## Troubleshooting
 
-Number of detected actions
+### Ollama returns 500 or CUDA errors
 
-Records requiring LLM review
+Reduce the number of workers:
 
-LLM JSON extraction failures
-
-Any pipeline errors
-
-Troubleshooting
-
-If Ollama returns a 500 error:
-Reduce the number of LLM workers:
-
+```
 --llm_workers 1
+```
 
+Restart Ollama:
 
-Restart the Ollama server:
-
+```
 ollama serve
+```
 
+### Extremely slow processing
 
-If the NER model loads slowly:
-Ensure a GPU is configured correctly or install CPU-only PyTorch.
+Reduce chunk size:
 
-If LLM JSON parsing fails:
-The system falls back automatically and logs the raw output for inspection.
+```
+--chunk_size 50
+```
 
-Extensibility
+Disable LLM:
 
-The pipeline is designed for easy modification:
+```
+--use_llm false
+```
 
-Add more dictionary entries for broader coverage.
+### NER model loads slowly
 
-Replace the NER model without changing the pipeline structure.
+Install a GPU-enabled PyTorch build or run in CPU-only mode.
 
-Adjust chunk size for memory or performance considerations.
+---
 
-Extend LLM prompts for specialized domains.
+## Extending the Pipeline
+
+You can extend the project by:
+
+* Adding more action patterns
+* Updating or replacing the NER model
+* Expanding the drug dictionary
+* Introducing new LLM prompts
+* Adding dose extraction or temporal reasoning
+
+The code is modular and designed for change.
